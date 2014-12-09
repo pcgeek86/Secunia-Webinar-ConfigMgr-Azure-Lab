@@ -62,6 +62,7 @@ Remove-Variable -Name AdkDownload,AdkInstall;
 #endregion
 
 #region Microsoft SQL Server install
+Mount-DiskImage -ImagePath s:\iso\sql.iso -StorageType ISO;
 $SqlVolume = (Get-Volume).Where({ $PSItem.FileSystemLabel -match 'SQLServer'; });
 $SqlInstall = @{
     FilePath = '{0}:\setup.exe' -f $SqlVolume.DriveLetter;
@@ -72,7 +73,14 @@ Start-Process @SqlInstall;
 Remove-Variable -Name SqlVolume,SqlInstall;
 #endregion
 
-
 #region Microsoft System Center 2012 R2 Configuration Manager install
-
+Mount-DiskImage -ImagePath s:\iso\configmgr.iso -StorageType ISO;
+$SccmVolume = (Get-Volume).Where({ $PSItem.FileSystemLabel -match 'SCCMSCEP'; });
+$SccmInstall = @{
+    FilePath = '{0}:\smssetup\bin\x64\setup.exe' -f $SccmVolume.DriveLetter;
+    ArgumentList = '/script "{0}"' -f 's:\iso\sccm01-sccm2012-unattend.ini';
+    Wait = $true;
+    };
+Start-Process @SccmInstall;
+Remove-Variable -Name SccmVolume,SccmInstall;
 #endregion
