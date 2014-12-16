@@ -7,12 +7,21 @@
     following resources in your Microsoft Azure subscription.
 
     Virtual Network
+    ---------------
+
         Name: SystemCenter
         Address Space: 10.5.1.0/24
         Subnets:
             Name / Address Space: Hosts / 10.5.1.0/25
-        DNS Server: 10.5.1.5
+        DNS Servers:
+            10.5.1.5
+            8.8.8.8
 
+    Microsoft ISOs
+    ---------------
+
+        * Download Microsoft SQL Server 2012 Enterprise Edition ISO to "sql.iso"
+        * Download Microsoft System Center 2012 R2 Configuration Manager ISO to "configmgr.iso"
 #>
 Clear-Host;
 $ErrorActionPreference = 'Continue';
@@ -35,11 +44,17 @@ $VNetName = 'SystemCenter';
 # Define the subnet that virtual machines will be added to.
 $SubnetName = 'Hosts';
 
-# TODO: Create new virtual network, subnet, and DNS server pointer
+# TODO: Create new virtual network, subnet, and DNS server pointer (this is a manual process for now)
 $VNetConfig = [xml](Get-AzureVNetConfig).XMLConfiguration;
 $NewVNet = @'
 
 '@;
+
+# XML manipulation goes here
+
+# Commit virtual network changes back to the Service Management
+#Set-AzureVNetConfig;
+
 Remove-Variable -Name NewVNet, VNetConfig;
 #endregion
 
