@@ -17,6 +17,8 @@
 Clear-Host;
 $ErrorActionPreference = 'Continue';
 $VerbosePreference = 'Continue';
+
+#region Azure Authentication
 (Get-AzureAccount).ForEach({ Remove-AzureAccount -Name $PSItem.Id -Force; });
 
 $Username = 'trevor@trevorsullivan.net';   #### NOTE: Update with your own user principal name (UPN).
@@ -25,19 +27,20 @@ Add-AzureAccount -Credential $AzureCredential;
 
 $SubscriptionName = 'Visual Studio Ultimate with MSDN'; #### NOTE: Update with your subscription name. Use Get-AzureSusbcription after calling Add-AzureAccount.
 Select-AzureSubscription -SubscriptionName $SubscriptionName -ErrorAction Stop;
+#endregion
 
 #region Azure Virtual Network
+# Defined the name of the virtual network that virtual machines will be added to
 $VNetName = 'SystemCenter';
+# Define the subnet that virtual machines will be added to.
+$SubnetName = 'Hosts';
+
+# TODO: Create new virtual network, subnet, and DNS server pointer
 $VNetConfig = [xml](Get-AzureVNetConfig).XMLConfiguration;
 $NewVNet = @'
 
 '@;
-
-# Define the subnet that virtual machines will be added to.
-$SubnetName = 'Hosts';
-
 Remove-Variable -Name NewVNet, VNetConfig;
-
 #endregion
 
 #region Azure Storage Account
@@ -72,8 +75,8 @@ if (!(Get-AzureStorageShare -Name $StorageShare.Name)) {
 #region Storage Container for ISOs
 $StorageContainerISO = @{
     Name = 'iso';
-    Permission = 'Container';
-    Context = $StorageContext;
+    Permission = 'Container';   #### NOTE: This setting causes the container permission to become publicly accessible, without any type of authentication.
+    Context = $StorageContext;  
     };
 if (!(Get-AzureStorageContainer -Context $StorageContext -Name $StorageContainerISO.Name -ErrorAction SilentlyContinue)) {
     New-AzureStorageContainer @StorageContainerISO;
@@ -126,9 +129,10 @@ $ImageList = Get-AzureVMImage;
 $ImageList.Where({ $PSItem.ImageName -match '2012-R2'; }).ImageName;
 $ImageName = 'a699494373c04fc0bc8f2bb1389d6106__Windows-Server-2012-R2-201410.01-en.us-127GB.vhd'; #### NOTE: Update this to the appropriate Windows Server image from the gallery.
 
-# Create an empty HashTable to hold the virtual machine configurations
+# Create an empty array to hold the virtual machine configurations
 $VMList = @();
 
+#region dc01
 # Contains the Windows provisioning configuration for virtual machines
 $ProvisioningConfig = @{
     Windows = $true;
@@ -136,8 +140,7 @@ $ProvisioningConfig = @{
     Password = 'P@ssw0rd!!';   #### NOTE: Update this to your own password.
     };
 
-
-#region dc01
+# The VM configuration for dc01 (Domain Controller)
 $VMConfig = @{
     Name = 'dc01';
     InstanceSize = 'Small';
@@ -218,6 +221,18 @@ Remove-Variable -Name VMConfig,NewVMConfig,DscConfig,DscExtension,CustomScript;
 #endregion
 
 #region sccm01
+
+# The provisioning configuration for the Configuration Manager server
+$SccmProvisioningConfig = @{
+    WindowsDomain = $true;
+    JoinDomain = 'trevorsullivan.net';
+    AdminUsername = $ProvisioningConfig.AdminUsername;
+    Password = $ProvisioningConfig.Password;
+    DomainUsername = $ProvisioningConfig.AdminUsername;
+    DomainPassword = $ProvisioningConfig.Password;
+    Domain = 'trevorsullivan.net';
+    };
+
 $VMConfig = @{
     Name = 'sccm01';
     InstanceSize = 'Large';
@@ -226,7 +241,7 @@ $VMConfig = @{
     };
 
 $NewVMConfig = New-AzureVMConfig @VMConfig;
-$NewVMConfig | Add-AzureProvisioningConfig @ProvisioningConfig;
+$NewVMConfig | Add-AzureProvisioningConfig @SccmProvisioningConfig;
 $NewVMConfig | Set-AzureStaticVNetIP -IPAddress 10.5.1.10;
 $NewVMConfig | Set-AzureSubnet -SubnetNames $SubnetName;
 
@@ -298,10 +313,19 @@ Remove-Variable -Name VMConfig,NewVMConfig,SccmDataDiskList,CustomScriptExtensio
 #region Create Virtual Machines
 $NewVMList = @{
     ServiceName = $CloudService.ServiceName;
-    VMs = $VMList;
-    VNetName = $VNetName; #### NOTE: Set this to the appropriate virtual network name.
+    VNetName = $VNetName;
     };
-New-AzureVM @NewVMList;
+# Create the Active Directory domain controller (dc01)
+if (!(Get-AzureVM -ServiceName $NewVMList.ServiceName -Name dc01)) {
+    New-AzureVM @NewVMList -VMs $VMList.Where({ $PSItem.RoleName -match '^dc01$'; });
+    Start-Sleep -Seconds 600;
+}
+
+# Create the Configuration Manager Primary Site server (sccm01)
+if (!(Get-AzureVM -ServiceName $NewVMList.ServiceName -Name sccm01)) {
+    New-AzureVM @NewVMList -VMs $VMList.Where({ $PSItem.RoleName -match '^sccm01$'; });
+}
+
 Write-Verbose -Message ('{0} Finished creating Azure virtual machines.' -f (Get-Date));
 Remove-Variable -Name NewVMList;
 return;
@@ -323,7 +347,7 @@ Get-AzureRemoteDesktopFile -ServiceName $CloudService.ServiceName -Name sccm01 -
 Restart-AzureVM -ServiceName $CloudService.ServiceName -Name dc01 -Launch;
 
 # PowerShell Remoting example to Domain Controller
-$WinRMUri = Get-AzureWinRMUri -ServiceName $CloudService.ServiceName -Name dc01;
+$WinRMUri = Get-AzureWinRMUri -ServiceName $CloudService.ServiceName -Name sccm01;
 $SessionOption = New-PSSessionOption -SkipCACheck -SkipCNCheck -SkipRevocationCheck;
 $Credential = New-Object -TypeName PSCredential -ArgumentList $ProvisioningConfig.AdminUsername, (ConvertTo-SecureString -AsPlainText -Force -String $ProvisioningConfig.Password);
 Enter-PSSession -URI $WinRMUri -Credential $Credential -SessionOption $SessionOption;
@@ -331,6 +355,9 @@ Enter-PSSession -URI $WinRMUri -Credential $Credential -SessionOption $SessionOp
 
 #region Cleanup
 Remove-AzureService -ServiceName $CloudService.ServiceName -Force -DeleteAll;
+Remove-AzureVM -ServiceName $CloudService.ServiceName -Name sccm01 -DeleteVHD;
+Get-AzureStorageContainer -Context $StorageContext | Remove-AzureStorageContainer -Force;
 Remove-AzureStorageAccount -StorageAccountName $StorageAccount.StorageAccountName;
 (Get-AzureDisk).Where({ $PSItem.AttachedTo.HostedServiceName -eq $CloudService.ServiceName; }) | Remove-AzureDisk -DeleteVHD;
+(Get-AzureDisk).Where({ $PSItem.MediaLink.Authority -eq ('{0}.blob.core.windows.net' -f $StorageAccount.StorageAccountName); }) | Remove-AzureDisk -DeleteVHD;
 #endregion
